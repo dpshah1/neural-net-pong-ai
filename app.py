@@ -1,9 +1,14 @@
 import os
 import sys
 
+print("=" * 50)
+print("Starting Pong AI Web Server...")
+print("=" * 50)
+
 # CRITICAL: Set SDL video driver to dummy BEFORE importing pygame
 # This prevents macOS from trying to create windows in background threads
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
+print("SDL_VIDEODRIVER set to 'dummy'")
 
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
@@ -18,11 +23,24 @@ import time
 import pygame
 # Initialize Pygame on main thread with dummy driver
 # This ensures it's fully initialized before any background threads try to use it
-pygame.init()
+try:
+    pygame.init()
+    print("Pygame initialized successfully")
+except Exception as e:
+    print(f"Warning: Pygame initialization had issues: {e}")
+    # Continue anyway - might still work
 
-from pong_ai import GameAI
+try:
+    from pong_ai import GameAI
+    print("Successfully imported GameAI")
+except Exception as e:
+    print(f"ERROR: Failed to import GameAI: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 
 app = Flask(__name__)
+print("Flask app created")
 app.config['SECRET_KEY'] = 'pong-ai-secret-key'
 
 # Use threading mode instead of eventlet (more compatible, works on macOS and Render)
@@ -31,18 +49,26 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Load AI model
 print("Loading AI model...")
+ai_model = None
 try:
-    checkpoint = torch.load('best_model_final.pth', weights_only=False, map_location='cpu')
-    ai_model = PongNet(
-        input_size=checkpoint['input_size'],
-        hidden_size=checkpoint['hidden_size']
-    )
-    ai_model.load_state_dict(checkpoint['model_state_dict'])
-    ai_model.eval()
-    print(f"AI model loaded successfully (generation {checkpoint.get('generation', 'unknown')})")
+    if not os.path.exists('best_model_final.pth'):
+        print("WARNING: best_model_final.pth not found! AI will not work.")
+    else:
+        print("Found model file, loading...")
+        checkpoint = torch.load('best_model_final.pth', weights_only=False, map_location='cpu')
+        ai_model = PongNet(
+            input_size=checkpoint['input_size'],
+            hidden_size=checkpoint['hidden_size']
+        )
+        ai_model.load_state_dict(checkpoint['model_state_dict'])
+        ai_model.eval()
+        print(f"AI model loaded successfully (generation {checkpoint.get('generation', 'unknown')})")
 except Exception as e:
     print(f"Error loading model: {e}")
+    import traceback
+    traceback.print_exc()
     ai_model = None
+    print("Continuing without AI model...")
 
 # Game instances (one per client)
 games = {}
@@ -197,34 +223,19 @@ def game_loop(client_id):
         socketio.emit('error', {'message': str(e)}, room=client_id)
 
 if __name__ == '__main__':
-    import socket
-    
-    # Get port from environment or use default
-    base_port = int(os.environ.get('PORT', 5000))
-    
-    # Find an available port
-    def find_free_port(start_port):
-        for port in range(start_port, start_port + 10):
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind(('', port))
-                    return port
-            except OSError:
-                continue
-        return None
-    
-    port = find_free_port(base_port)
-    
-    if port is None:
-        print(f"Error: Could not find an available port starting from {base_port}")
-        sys.exit(1)
-    
-    if port != base_port:
-        print(f"Port {base_port} is in use. Using port {port} instead.")
+    # Get port from environment (Render sets this)
+    port = int(os.environ.get('PORT', 5000))
     
     print(f"Starting server on port {port}...")
-    print(f"Open http://localhost:{port} in your browser")
+    print("Server is ready to accept connections")
     
-    # Run with threading mode (no eventlet needed)
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
+    try:
+        # Run with threading mode (no eventlet needed)
+        # Use allow_unsafe_werkzeug for production compatibility
+        socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True, log_output=True)
+    except Exception as e:
+        print(f"Fatal error starting server: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
