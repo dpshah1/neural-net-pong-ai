@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pong AI</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            background: #222;
+            color: #fff;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        .game-container {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        h1 {
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+        
+        #status {
+            color: #aaa;
+            margin: 10px 0;
+            min-height: 20px;
+        }
+        
+        .score {
+            display: flex;
+            justify-content: space-around;
+            font-size: 1.5em;
+            margin: 15px 0;
+            width: 800px;
+        }
+        
+        #gameCanvas {
+            border: 2px solid #fff;
+            background: #000;
+            display: block;
+            margin: 10px auto;
+        }
+        
+        .controls {
+            margin: 15px 0;
+            color: #aaa;
+        }
+        
+        button {
+            background: #444;
+            color: #fff;
+            border: 1px solid #666;
+            padding: 10px 20px;
+            font-size: 1em;
+            cursor: pointer;
+            margin: 5px;
+        }
+        
+        button:hover:not(:disabled) {
+            background: #555;
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        #gameOverMsg {
+            color: #ff0;
+            margin: 10px 0;
+            font-size: 1.2em;
+        }
+        
+        .explanation {
+            max-width: 800px;
+            margin-top: 40px;
+            padding: 20px;
+            background: #333;
+            border: 1px solid #555;
+            text-align: left;
+        }
+        
+        .explanation h2 {
+            margin-bottom: 15px;
+            font-size: 1.5em;
+        }
+        
+        .explanation p {
+            margin-bottom: 10px;
+            line-height: 1.6;
+            color: #ccc;
+        }
+        
+        .explanation ul {
+            margin-left: 20px;
+            margin-bottom: 10px;
+            color: #ccc;
+        }
+        
+        .explanation li {
+            margin-bottom: 8px;
+        }
+        
+        .explanation code {
+            background: #222;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+            color: #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <h1>Pong AI</h1>
+        <div id="status">Connecting to server...</div>
+        
+        <div class="score">
+            <div>You: <span id="scoreLeft">0</span></div>
+            <div>AI: <span id="scoreRight">0</span></div>
+        </div>
+        
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        
+        <div class="controls">
+            Controls: W (up) / S (down)
+        </div>
+        
+        <button id="startBtn" onclick="startGame()">Start Game</button>
+        <button id="restartBtn" onclick="restartGame()" disabled>Restart</button>
+        
+        <div id="gameOverMsg" style="display: none;"></div>
+    </div>
+
+    <div class="explanation">
+        <h2>How It Works</h2>
+        <p>
+            This AI opponent was trained using a <strong>Genetic Algorithm</strong> to evolve neural networks that play Pong.
+        </p>
+        
+        <h3>Training Process:</h3>
+        <ul>
+            <li><strong>Neural Network Architecture:</strong> A feedforward network with 10 input features (paddle/ball positions, velocities, time-to-intercept predictions) and 1 continuous output (paddle velocity in [-1, 1]).</li>
+            <li><strong>Genetic Algorithm:</strong> A population of 50 neural networks evolves over generations through selection, crossover, and mutation.</li>
+            <li><strong>Fitness Function:</strong> Networks are evaluated based on scoring points, hitting the ball, returning shots, and penalties for missing, camping, or being idle.</li>
+            <li><strong>Curriculum Learning:</strong> Early generations play against a rule-based teacher, then progress to playing against the current population, and finally against a Hall of Fame of best historical models.</li>
+            <li><strong>State Mirroring:</strong> The AI uses a symmetric state representation, so it performs equally well on both left and right sides without retraining.</li>
+        </ul>
+        
+        <h3>Technical Details:</h3>
+        <ul>
+            <li><strong>Framework:</strong> PyTorch for neural networks, Pygame for game simulation</li>
+            <li><strong>Training:</strong> ~300 generations with population size 50, resulting in a model that can reliably return shots and play competitively</li>
+            <li><strong>State Features:</strong> Normalized paddle/ball positions, velocities, signed distances, time-to-intercept, and predicted intercept point</li>
+            <li><strong>Action Space:</strong> Continuous control (float in [-1, 1]) instead of discrete actions, allowing smoother gameplay</li>
+        </ul>
+        
+        <p>
+            The model you're playing against was trained for hundreds of generations, learning through trial and error which strategies lead to higher fitness scores (winning games, hitting the ball, avoiding penalties).
+        </p>
+    </div>
+
+    <script>
+        const socket = io();
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        let gameState = {
+            paddle_left_y: 250,
+            paddle_right_y: 250,
+            ball_x: 400,
+            ball_y: 300,
+            ball_dx: 0,
+            ball_dy: 0,
+            score_left: 0,
+            score_right: 0,
+            game_over: false,
+            winner: null
+        };
+        
+        let keys = {};
+        let gameRunning = false;
+        
+        socket.on('connect', () => {
+            document.getElementById('status').textContent = 'Connected! Click Start Game to begin.';
+            document.getElementById('status').style.color = '#4CAF50';
+        });
+        
+        socket.on('connected', (data) => {
+            console.log('Connected:', data);
+        });
+        
+        socket.on('game_state', (data) => {
+            gameState = data;
+            draw();
+        });
+        
+        socket.on('game_over', (data) => {
+            gameRunning = false;
+            gameState.game_over = true;
+            gameState.winner = data.winner;
+            document.getElementById('gameOverMsg').style.display = 'block';
+            document.getElementById('gameOverMsg').textContent = 
+                `${data.winner === 'left' ? 'You' : 'AI'} Wins! Final Score: ${data.score_left} - ${data.score_right}`;
+            document.getElementById('restartBtn').disabled = false;
+            document.getElementById('startBtn').disabled = true;
+        });
+        
+        socket.on('error', (data) => {
+            document.getElementById('status').textContent = 'Error: ' + data.message;
+            document.getElementById('status').style.color = '#f44';
+        });
+        
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            if (gameRunning) {
+                if (e.key.toLowerCase() === 'w') {
+                    socket.emit('player_input', { action: 'up' });
+                } else if (e.key.toLowerCase() === 's') {
+                    socket.emit('player_input', { action: 'down' });
+                }
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+            if (gameRunning && (e.key.toLowerCase() === 'w' || e.key.toLowerCase() === 's')) {
+                socket.emit('player_input', { action: null });
+            }
+        });
+        
+        function startGame() {
+            socket.emit('start_game');
+            gameRunning = true;
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('restartBtn').disabled = true;
+            document.getElementById('gameOverMsg').style.display = 'none';
+            document.getElementById('status').textContent = 'Game in progress...';
+            document.getElementById('status').style.color = '#4CAF50';
+        }
+        
+        function restartGame() {
+            startGame();
+        }
+        
+        function draw() {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([10, 10]);
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, 0);
+            ctx.lineTo(canvas.width / 2, canvas.height);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            ctx.fillStyle = '#fff';
+            const paddleWidth = 15;
+            const paddleHeight = 100;
+            
+            ctx.fillRect(10, gameState.paddle_left_y - paddleHeight / 2, paddleWidth, paddleHeight);
+            ctx.fillRect(canvas.width - 25, gameState.paddle_right_y - paddleHeight / 2, paddleWidth, paddleHeight);
+            
+            const ballSize = 15;
+            ctx.fillRect(gameState.ball_x - ballSize / 2, gameState.ball_y - ballSize / 2, ballSize, ballSize);
+            
+            document.getElementById('scoreLeft').textContent = gameState.score_left;
+            document.getElementById('scoreRight').textContent = gameState.score_right;
+        }
+        
+        draw();
+        
+        setInterval(() => {
+            if (gameRunning) {
+                if (keys['w']) {
+                    socket.emit('player_input', { action: 'up' });
+                } else if (keys['s']) {
+                    socket.emit('player_input', { action: 'down' });
+                }
+            }
+        }, 16);
+    </script>
+</body>
+</html>

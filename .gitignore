@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# PyTorch
+*.pth
+!best_model_final.pth
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Training outputs
+training_progress_*.html
+training_progress_*.png
+best_model_gen_*.pth
+best_model_interrupted.pth
+
+# Keep final model for deployment
+!best_model_final.pth
